@@ -218,7 +218,7 @@
         <h1>APNewsArchive</h1>
         <p>Single-file local utility for scanning the AP breaking-news feed, comparing the top 10 stories against a p2fk keyword, and etching only the missing stories with SupSpace-friendly formatting.</p>
       </div>
-      <div class="mini">Open this file locally in a modern browser. Wallet operations are testnet3-only.</div>
+      <div class="mini">Open this file in a modern browser. Remote feed fetches may require a CORS-friendly proxy or serving this file over HTTP or HTTPS. Wallet operations are testnet3-only.</div>
     </div>
 
     <div class="grid">
@@ -335,6 +335,7 @@
     const UNSAFE_RE = /[^a-zA-Z0-9._-]/g;
     const ADDR_RE = /^[mn][1-9A-HJ-NP-Za-km-z]{25,34}$/;
     const TXID_RE = /^[0-9a-fA-F]{64}$/;
+    const HEADLINE_PADDING_MAX = 48; // Allow up to 48 extra characters for short source/date suffixes when de-duplicating headline echoes.
 
     const S = {
       priv: null,
@@ -471,6 +472,9 @@
         if (state.status === 'broadcasted') statusPills.push('<span class="pill warn">Broadcasted</span>');
         if (state.status === 'confirmed') statusPills.push('<span class="pill good">Confirmed</span>');
         if (state.status === 'error') statusPills.push(`<span class="pill bad">${esc(shortText(state.error || 'Error', 50))}</span>`);
+        const articleLink = getPreferredArticleLink(article);
+        const articleDescription = shortText(article?.description || '', 220);
+        const articleDescriptionFallback = article?.title ? 'Feed only exposed the headline.' : 'No feed details available.';
         return `
           <tr>
             <td>
@@ -480,10 +484,11 @@
             <td>
               <div><strong>${esc(article?.title || '—')}</strong></div>
               <div class="mini">${esc(fmtPublished(article?.publishedAt))}</div>
-              ${article?.link ? `<div class="mini"><a href="${esc(article.link)}" target="_blank" rel="noreferrer">Open AP story</a></div>` : ''}
+              ${articleLink ? `<div class="mini"><a href="${esc(articleLink)}" target="_blank" rel="noreferrer">Open AP story</a></div>` : ''}
             </td>
             <td>
-              <div>${esc(shortText(article?.description || '', 220) || 'No description')}</div>
+              <div>${esc(articleDescription || articleDescriptionFallback)}</div>
+              ${articleLink ? `<div class="mini"><a href="${esc(articleLink)}" target="_blank" rel="noreferrer">Story link</a></div>` : ''}
               ${article?.image ? `<div class="mini">${esc(isImageUrl(article.image) ? `Image attachment: ${shortText(article.image, 96)}` : `Image link: ${shortText(article.image, 96)}`)}</div>` : '<div class="mini">No image found in feed.</div>'}
             </td>
             <td>
@@ -497,7 +502,7 @@
             <td>
               <div class="btn-row">
                 <button class="small-btn" data-sync-id="${esc(row.identifier)}" ${(!row.hasFeed || row.hasP2fk) ? 'disabled' : ''}>Etch one</button>
-                <button class="small-btn" data-open-link="${esc(row.identifier)}" ${!article?.link ? 'disabled' : ''}>Open AP</button>
+                <button class="small-btn" data-open-link="${esc(row.identifier)}" ${!getPreferredArticleLink(article) ? 'disabled' : ''}>Open AP</button>
               </div>
             </td>
           </tr>`;
@@ -505,7 +510,7 @@
       body.querySelectorAll('[data-sync-id]').forEach(btn => btn.addEventListener('click', () => syncArticle(btn.dataset.syncId)));
       body.querySelectorAll('[data-open-link]').forEach(btn => btn.addEventListener('click', () => {
         const row = (S.comparisonRows || []).find(item => item.identifier === btn.dataset.openLink);
-        const url = row?.feedItems?.[0]?.link;
+        const url = getPreferredArticleLink(row?.feedItems?.[0]);
         if (url) window.open(url, '_blank', 'noopener,noreferrer');
       }));
       renderSummary();
@@ -565,6 +570,9 @@
         } finally {
           clearTimeout(id);
         }
+      }
+      if (location.protocol === 'file:') {
+        throw new Error('Feed fetch was blocked by browser CORS on file://. Serve this HTML over HTTP/HTTPS or use a working feed proxy.');
       }
       throw lastError;
     }
@@ -940,6 +948,67 @@
       return norm(box.textContent || box.innerText || '');
     }
 
+    function normalizeLooseText(value) {
+      return norm(value)
+        .toLowerCase()
+        .replace(/https?:\/\/\S+/g, ' ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+    }
+
+    function stripDescriptionBoilerplate(value) {
+      let text = norm(value).replace(/\s+/g, ' ');
+      if (!text) return '';
+      const suffixes = [
+        /\s*(?:[-–—|•·]\s*)?(?:ap news|associated press|google news)\s*$/i,
+        /\s*(?:[-–—|•·]\s*)?\d+\s+(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago\s*$/i,
+      ];
+      let prev = '';
+      while (text && text !== prev) {
+        prev = text;
+        suffixes.forEach(re => { text = text.replace(re, '').trim(); });
+      }
+      return text;
+    }
+
+    function isDuplicateHeadline(text, title) {
+      const normalizedText = normalizeLooseText(stripDescriptionBoilerplate(text));
+      const normalizedTitle = normalizeLooseText(stripDescriptionBoilerplate(title));
+      if (!normalizedText || !normalizedTitle) return false;
+      if (normalizedText === normalizedTitle) return true;
+      if (normalizedText.startsWith(normalizedTitle) && normalizedText.length - normalizedTitle.length <= HEADLINE_PADDING_MAX) return true;
+      if (normalizedText.endsWith(normalizedTitle) && normalizedText.length - normalizedTitle.length <= HEADLINE_PADDING_MAX) return true;
+      return false;
+    }
+
+    function cleanArticleDescription(rawDescription, title) {
+      const plain = stripDescriptionBoilerplate(stripHtml(rawDescription));
+      if (!plain) return '';
+      const parts = plain.split(/\n+|\s{2,}/).map(stripDescriptionBoilerplate).filter(Boolean);
+      if (!parts.length) return '';
+      const filtered = parts.filter(part => !isDuplicateHeadline(part, title));
+      if (filtered.length) return filtered.join(' ');
+      return isDuplicateHeadline(plain, title) ? '' : plain;
+    }
+
+    function extractPreferredArticleLink(rawDescription) {
+      const box = document.createElement('div');
+      box.innerHTML = String(rawDescription || '');
+      const links = [...box.querySelectorAll('a[href]')]
+        .map(link => norm(link.getAttribute('href') || ''))
+        .filter(Boolean);
+      if (!links.length) return '';
+      const directAp = links.find(link => link.includes('apnews.com'));
+      if (directAp) return directAp;
+      const nonGoogle = links.find(link => !link.includes('news.google.com'));
+      return nonGoogle || links[0];
+    }
+
+    function getPreferredArticleLink(article) {
+      // Prefer links in the order they become more specific to the real AP article.
+      return norm(article?.resolvedLink || article?.sourceLink || article?.link);
+    }
+
     function extractHtmlImage(input) {
       const box = document.createElement('div');
       box.innerHTML = String(input || '');
@@ -964,12 +1033,16 @@
     }
 
     function normalizeFeedJsonItem(item) {
-      const image = norm(item?.thumbnail || item?.enclosure?.link || item?.enclosure?.url || item?.image || extractHtmlImage(item?.description || item?.content || ''));
+      const rawDescription = String(item?.description || item?.content || item?.summary || '');
+      const image = norm(item?.thumbnail || item?.enclosure?.link || item?.enclosure?.url || item?.image || extractHtmlImage(rawDescription));
+      const title = norm(item?.title);
       return {
-        title: norm(item?.title),
+        title,
         link: norm(item?.link),
+        sourceLink: extractPreferredArticleLink(rawDescription),
         guid: norm(item?.guid),
-        description: stripHtml(item?.description || item?.content || item?.summary || ''),
+        rawDescription,
+        description: cleanArticleDescription(rawDescription, title),
         publishedAt: norm(item?.pubDate || item?.published || item?.isoDate),
         image,
       };
@@ -999,11 +1072,14 @@
       const linkFromText = queryText(node, ['link']);
       const image = queryAttr(node, ['enclosure[type^="image/"]', 'media\\:content[url]', 'media\\:thumbnail[url]'])
         || extractHtmlImage(rawDescription);
+      const title = queryText(node, ['title']);
       return {
-        title: queryText(node, ['title']),
+        title,
         link: linkFromAtom || linkFromText,
+        sourceLink: extractPreferredArticleLink(rawDescription),
         guid: queryText(node, ['guid', 'id']),
-        description: stripHtml(rawDescription),
+        rawDescription,
+        description: cleanArticleDescription(rawDescription, title),
         publishedAt: queryText(node, ['pubDate', 'published', 'updated']),
         image,
       };
@@ -1031,7 +1107,9 @@
           ...item,
           title: norm(item.title),
           link: norm(item.link),
+          sourceLink: norm(item.sourceLink),
           guid: norm(item.guid),
+          rawDescription: item.rawDescription,
           description: item.description,
           publishedAt: norm(item.publishedAt),
           image: norm(item.image),
@@ -1190,13 +1268,15 @@
     function buildSyncText(row) {
       const article = row.feedItems[0];
       const prefix = sanitize($('messagePrefixInput').value);
+      const articleLink = getPreferredArticleLink(article);
+      const description = norm(article?.description);
       const bits = [];
       if (prefix) bits.push(prefix);
       bits.push('AP Breaking News');
       if (article?.title) bits.push(article.title);
       if (article?.fullText) bits.push(article.fullText);
-      else if (article?.description) bits.push(article.description);
-      if (article?.link) bits.push(`Read more: ${article.link}`);
+      else if (description) bits.push(description);
+      if (articleLink) bits.push(`Read more: ${articleLink}`);
       bits.push(`Identifier: ${row.identifier}`);
       if (article?.publishedAt) bits.push(`Published: ${article.publishedAt}`);
       bits.push(`#${S.keyword}`);
@@ -1235,34 +1315,32 @@
 
         // Fetch actual article link and text
         try {
-            if (article.link && article.link.includes('news.google.com')) {
-                // We can parse the description HTML for the a tag to get the actual AP News link
-                const box = document.createElement('div');
-                box.innerHTML = article.description || '';
-                const link = box.querySelector('a');
-                if (link && link.href) {
-                     article.link = link.href;
-                }
-
-                if (article.link && article.link.includes('apnews.com')) {
-                     const template = getFeedProxyTemplate();
-                     const target = template.includes('{{url}}') ? template.replace('{{url}}', encodeURIComponent(article.link)) : `${template}?url=${encodeURIComponent(article.link)}`;
-                     const articleRes = await fetch(target);
-                     const articleText = await articleRes.text();
-                     let articleHtml = articleText;
-                     if (/^\s*\{/.test(articleText)) {
-                        try {
-                           articleHtml = JSON.parse(articleText).contents || '';
-                        } catch(e) {}
-                     }
-                     const articleBox = document.createElement('div');
-                     articleBox.innerHTML = articleHtml;
-                     const targetNode = articleBox.querySelector('.RichTextStoryBody') || articleBox.querySelector('.Article') || articleBox.querySelector('.article-body') || articleBox.querySelector('.story') || articleBox.querySelector('main') || articleBox;
-                     article.fullText = targetNode.textContent.trim().replace(/\s+/g, ' ').substring(0, 1000);
-                }
+          if (!article.sourceLink && article.rawDescription) {
+            article.sourceLink = extractPreferredArticleLink(article.rawDescription);
+          }
+          const articleLink = getPreferredArticleLink(article);
+          if (articleLink && articleLink.includes('apnews.com')) {
+            const template = getFeedProxyTemplate();
+            article.resolvedLink = articleLink;
+            const target = template.includes('{{url}}') ? template.replace('{{url}}', encodeURIComponent(articleLink)) : `${template}?url=${encodeURIComponent(articleLink)}`;
+            const articleRes = await fetch(target);
+            const articleText = await articleRes.text();
+            let articleHtml = articleText;
+            if (/^\s*\{/.test(articleText)) {
+              try {
+                const payload = JSON.parse(articleText);
+                articleHtml = payload?.contents || '';
+              } catch (error) {
+                appendLog(`Warning: Failed to parse proxied AP payload for ${identifier}: ${error.message}`, 'warn');
+              }
             }
+            const articleBox = document.createElement('div');
+            articleBox.innerHTML = articleHtml;
+            const targetNode = articleBox.querySelector('.RichTextStoryBody') || articleBox.querySelector('.Article') || articleBox.querySelector('.article-body') || articleBox.querySelector('.story') || articleBox.querySelector('main') || articleBox;
+            article.fullText = norm(targetNode?.textContent || '').replace(/\s+/g, ' ').substring(0, 1000);
+          }
         } catch (e) {
-            appendLog(`Warning: Failed to fetch full article text for ${identifier}: ${e.message}`, 'warn');
+          appendLog(`Warning: Failed to fetch full article text for ${identifier}: ${e.message}`, 'warn');
         }
 
         const outputs = await buildMsgOutputs({
