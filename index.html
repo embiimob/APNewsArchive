@@ -342,6 +342,7 @@
     const MIN_PUNCTUATED_WORDS = 25;
     const MIN_PARAGRAPH_LENGTH = 60;
     const MAX_PARAGRAPHS_FOR_FALLBACK = 8;
+    const MAX_TEXT_LENGTH_VARIANCE = 40;
 
     const S = {
       priv: null,
@@ -983,7 +984,9 @@
       const cleanText = norm(String(text || ''));
       const cleanTitle = norm(String(title || ''));
       if (!cleanText || !cleanTitle) return cleanText;
-      if (!isDuplicateHeadline(cleanText, cleanTitle) && !normalizeLooseText(cleanText).startsWith(normalizeLooseText(cleanTitle))) return cleanText;
+      const normalizedText = normalizeLooseText(cleanText);
+      const normalizedTitle = normalizeLooseText(cleanTitle);
+      if (!isDuplicateHeadline(cleanText, cleanTitle) && !normalizedText.startsWith(normalizedTitle)) return cleanText;
       const matcher = new RegExp(`^\\s*${escRe(cleanTitle)}(?:\\s*[-–—:|•]+\\s*)?`, 'i');
       return norm(cleanText.replace(matcher, ''));
     }
@@ -1327,7 +1330,7 @@
       if (bodyText && description) {
         const bodyNorm = normalizeLooseText(bodyText);
         const descNorm = normalizeLooseText(description);
-        const closeLength = Math.abs(bodyNorm.length - descNorm.length) <= 40;
+        const closeLength = Math.abs(bodyNorm.length - descNorm.length) <= MAX_TEXT_LENGTH_VARIANCE;
         const effectivelySame = bodyNorm === descNorm
           || (bodyNorm.startsWith(descNorm) && closeLength)
           || (descNorm.startsWith(bodyNorm) && closeLength);
