@@ -216,7 +216,7 @@
     <div class="hero">
       <div>
         <h1>APNewsArchive</h1>
-        <p>Single-file local utility for scanning the AP breaking-news feed, comparing the top 10 stories against a p2fk keyword, and etching only the missing stories with SupSpace-friendly formatting.</p>
+        <p>Single-file local utility for scanning multiple independent breaking-news feeds, comparing the top 10 stories against a p2fk keyword, and etching only the missing stories with SupSpace-friendly formatting.</p>
       </div>
       <div class="mini">Open this file locally in a modern browser. Wallet operations are testnet3-only.</div>
     </div>
@@ -245,13 +245,13 @@
             <input id="keywordInput" value="#APBreakingNews" placeholder="#keyword" autocomplete="off" spellcheck="false">
           </div>
           <div class="field">
-            <label for="feedUrlInput">AP breaking-news feed URL</label>
-            <input id="feedUrlInput" value="https://news.google.com/rss/search?q=site:apnews.com" autocomplete="off" spellcheck="false">
+            <label for="feedUrlInput">Breaking-news feed URLs (comma or newline separated)</label>
+            <input id="feedUrlInput" value="https://feeds.npr.org/1001/rss.xml, https://www.aljazeera.com/xml/rss/all.xml, https://www.theguardian.com/world/rss, https://feeds.bbci.co.uk/news/world/rss.xml, https://rss.dw.com/rdf/rss-en-top" autocomplete="off" spellcheck="false">
           </div>
         </div>
         <div class="field-row">
           <div class="field">
-            <label for="feedProxyInput">Feed / article proxy template (non-Google URLs)</label>
+            <label for="feedProxyInput">Feed / article proxy template</label>
             <input id="feedProxyInput" value="https://corsproxy.io/?key=f136e028&amp;url={{url}}" autocomplete="off" spellcheck="false">
           </div>
           <div class="field">
@@ -274,11 +274,11 @@
           </div>
         </div>
         <div class="btn-row">
-          <button id="analyzeBtn" class="primary">Scan AP top 10 now</button>
+          <button id="analyzeBtn" class="primary">Scan top 10 now</button>
           <button id="startSyncBtn" class="good">Start auto archive</button>
           <button id="stopSyncBtn" class="warn">Stop auto archive</button>
         </div>
-        <div id="analysisStatus" class="status">Enter a keyword, verify the feed source, then scan the AP top 10.</div>
+        <div id="analysisStatus" class="status">Enter a keyword, verify feed sources, then scan the top 10 stories.</div>
       </section>
 
       <section class="card span-12">
@@ -343,6 +343,17 @@
     const MIN_PARAGRAPH_LENGTH = 60;
     const MAX_PARAGRAPHS_FOR_FALLBACK = 8;
     const MAX_TEXT_LENGTH_VARIANCE = 40;
+    const URL_DECODE_ATTEMPTS = 2;
+    const LINK_PRIORITY_AP = 0;
+    const LINK_PRIORITY_OTHER = 1;
+    const LINK_PRIORITY_GOOGLE = 2;
+    const DEFAULT_FEED_SOURCES = [
+      'https://feeds.npr.org/1001/rss.xml',
+      'https://www.aljazeera.com/xml/rss/all.xml',
+      'https://www.theguardian.com/world/rss',
+      'https://feeds.bbci.co.uk/news/world/rss.xml',
+      'https://rss.dw.com/rdf/rss-en-top',
+    ];
 
     const S = {
       priv: null,
@@ -380,9 +391,13 @@
     };
     const unique = arr => [...new Set(arr.filter(Boolean))];
     const cleanKeyword = value => norm(value).replace(/^#/, '');
+    const parseTimestamp = value => {
+      const parsed = Date.parse(String(value || ''));
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
     const fmtPublished = value => {
-      const n = Date.parse(value || '');
-      return Number.isFinite(n) ? new Date(n).toLocaleString() : 'Unknown';
+      const timestamp = parseTimestamp(value);
+      return timestamp ? new Date(timestamp).toLocaleString() : 'Unknown';
     };
     const isImageUrl = value => {
       try {
@@ -413,7 +428,13 @@
 
     function getApiBase() { return norm($('apiBaseInput').value) || 'https://p2fk.io'; }
     function getMempoolApi() { return norm($('mempoolInput').value) || 'https://mempool.space/testnet/api'; }
-    function getFeedUrl() { return norm($('feedUrlInput').value) || 'https://news.google.com/rss/search?q=site:apnews.com'; }
+    function parseFeedUrlList(value) {
+      return unique(String(value || '').split(/[\n,]/).map(norm).filter(Boolean));
+    }
+    function getFeedUrls() {
+      const configured = parseFeedUrlList($('feedUrlInput').value);
+      return configured.length ? configured : DEFAULT_FEED_SOURCES;
+    }
     function getFeedProxyTemplate() { return norm($('feedProxyInput').value) || 'https://corsproxy.io/?key=f136e028&url={{url}}'; }
     function isGoogleCall(url) {
       try {
@@ -422,6 +443,43 @@
       } catch {
         return false;
       }
+    }
+    function isApNewsUrl(url) {
+      try {
+        const hostname = new URL(url).hostname.toLowerCase();
+        return hostname === 'apnews.com' || hostname.endsWith('.apnews.com');
+      } catch {
+        return false;
+      }
+    }
+    function unwrapGoogleNewsUrl(url) {
+      const source = norm(url);
+      if (!source) return '';
+      if (!isGoogleCall(source)) return source;
+      try {
+        const parsed = new URL(source);
+        for (const key of ['url', 'u', 'q']) {
+          const value = norm(parsed.searchParams.get(key));
+          if (!value) continue;
+          let candidate = value;
+          for (let i = 0; i < URL_DECODE_ATTEMPTS; i++) {
+            try {
+              candidate = decodeURIComponent(candidate);
+            } catch {
+              break;
+            }
+          }
+          try {
+            const parsedCandidate = new URL(candidate);
+            if (parsedCandidate.protocol === 'http:' || parsedCandidate.protocol === 'https:') return parsedCandidate.toString();
+          } catch {
+            // continue checking other params
+          }
+        }
+      } catch {
+        return '';
+      }
+      return '';
     }
     function buildCorsProxyUrl(url) {
       return `https://corsproxy.io/?key=f136e028&url=${encodeURIComponent(url)}`;
@@ -451,7 +509,7 @@
       const items = [
         ['Keyword address', S.keywordAddress || '—'],
         ['p2fk refs', totals.p2fk],
-        ['AP feed stories', totals.feed],
+        ['Feed stories', totals.feed],
         ['Matched', totals.matched],
         ['Missing on p2fk', totals.missing],
         ['p2fk only', totals.chainOnly],
@@ -565,12 +623,10 @@
 
     async function fetchFeedText(url) {
       const template = getFeedProxyTemplate();
-      const isGoogleUrl = isGoogleCall(url);
-      const targets = isGoogleUrl
-        ? unique([buildCorsProxyUrl(url)])
-        : unique([buildTemplateProxyUrl(url, template), url]);
+      const targets = unique([buildTemplateProxyUrl(url, template), buildCorsProxyUrl(url), url]);
       let lastError = new Error('Failed to fetch feed from any available source');
       for (const target of targets) {
+        if (!target) continue;
         const ac = new AbortController();
         const id = setTimeout(() => ac.abort(), 30000);
         try {
@@ -1074,11 +1130,13 @@
       const links = [...doc.querySelectorAll('a[href]')]
         .map(link => norm(link.getAttribute('href') || ''))
         .filter(Boolean);
-      if (!links.length) return '';
-      const directAp = links.find(link => link.includes('apnews.com'));
+      const unwrappedLinks = links.map(unwrapGoogleNewsUrl).filter(Boolean);
+      const candidates = unique([...unwrappedLinks, ...links]);
+      if (!candidates.length) return '';
+      const directAp = candidates.find(link => isApNewsUrl(link));
       if (directAp) return directAp;
-      const nonGoogle = links.find(link => !link.includes('news.google.com'));
-      return nonGoogle || links[0];
+      const nonGoogle = candidates.find(link => !isGoogleCall(link));
+      return nonGoogle || candidates[0];
     }
 
     function getPreferredArticleLink(article) {
@@ -1092,28 +1150,58 @@
     }
 
     async function buildArticleIdentifier(article) {
-      const seed = [
-        norm(article.guid),
-        norm(article.link),
-        norm(article.title),
-        norm(article.publishedAt),
-      ].filter(Boolean).join('|');
-      if (!seed) throw new Error('AP article is missing required fields (guid, link, title, or publishedAt) for stable identifier generation');
+      const normalizeIdentifierUrl = (rawUrl) => {
+        const source = norm(rawUrl);
+        if (!source) return '';
+        try {
+          const parsed = new URL(source);
+          parsed.hash = '';
+          const trackerParams = [
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+            'utm_name', 'utm_id', 'gclid', 'fbclid', 'mc_cid', 'mc_eid', 'ref', 'ref_src',
+          ];
+          trackerParams.forEach(param => parsed.searchParams.delete(param));
+          const sortedParams = [...parsed.searchParams.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+          parsed.search = '';
+          sortedParams.forEach(([key, value]) => parsed.searchParams.append(key, value));
+          parsed.hostname = parsed.hostname.toLowerCase();
+          parsed.pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+          return parsed.toString();
+        } catch {
+          return source.toLowerCase();
+        }
+      };
+      const primaryUrl = getPreferredArticleLink(article) || norm(article.guid);
+      const normalizedUrl = normalizeIdentifierUrl(primaryUrl);
+      if (!normalizedUrl) throw new Error('Article is missing URL fields (link, sourceLink, or guid) for stable identifier generation');
+      return `APID:${(await sha256hex(normalizedUrl)).slice(0, 24).toUpperCase()}`;
+    }
 
-      const urlMatch = norm(article.guid).match(/articles\/([^?]+)/);
-      if (urlMatch) {
-          return `CBM${urlMatch[1].substring(0, 17)}`;
+    function parseFeedItems(raw) {
+      if (/^\s*[\[{]/.test(raw)) {
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch (error) {
+          throw new Error(`Feed returned invalid JSON: ${error.message}`);
+        }
+        const jsonItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : []);
+        return jsonItems.map(normalizeFeedJsonItem);
       }
-      return `APID:${(await sha256hex(seed)).slice(0, 24).toUpperCase()}`;
+      const doc = new DOMParser().parseFromString(raw, 'application/xml');
+      const xmlItems = [...doc.querySelectorAll('item, entry')];
+      return xmlItems.map(normalizeFeedXmlItem);
     }
 
     function normalizeFeedJsonItem(item) {
       const rawDescription = String(item?.description || item?.content || item?.summary || '');
       const image = norm(item?.thumbnail || item?.enclosure?.link || item?.enclosure?.url || item?.image || extractHtmlImage(rawDescription));
       const title = norm(item?.title);
+      const feedLink = norm(item?.link);
       return {
         title,
-        link: norm(item?.link),
+        link: unwrapGoogleNewsUrl(feedLink) || feedLink,
         sourceLink: extractPreferredArticleLink(rawDescription),
         guid: norm(item?.guid),
         rawDescription,
@@ -1145,12 +1233,13 @@
       const rawDescription = queryText(node, ['description', 'content\\:encoded', 'summary']);
       const linkFromAtom = queryAttr(node, ['link[href]'], 'href');
       const linkFromText = queryText(node, ['link']);
+      const feedLink = linkFromAtom || linkFromText;
       const image = queryAttr(node, ['enclosure[type^="image/"]', 'media\\:content[url]', 'media\\:thumbnail[url]'])
         || extractHtmlImage(rawDescription);
       const title = queryText(node, ['title']);
       return {
         title,
-        link: linkFromAtom || linkFromText,
+        link: unwrapGoogleNewsUrl(feedLink) || feedLink,
         sourceLink: extractPreferredArticleLink(rawDescription),
         guid: queryText(node, ['guid', 'id']),
         rawDescription,
@@ -1161,23 +1250,38 @@
     }
 
     async function loadFeedItems() {
-      const feedUrl = getFeedUrl();
-      if (!feedUrl) throw new Error('Enter an AP feed URL');
-      appendLog(`Loading AP feed from ${feedUrl}…`);
-      const raw = await fetchFeedText(feedUrl);
-      let items = [];
-      if (/^\s*[\[{]/.test(raw)) {
-        const payload = JSON.parse(raw);
-        const jsonItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : []);
-        items = jsonItems.map(normalizeFeedJsonItem);
-      } else {
-        const doc = new DOMParser().parseFromString(raw, 'application/xml');
-        const xmlItems = [...doc.querySelectorAll('item, entry')];
-        items = xmlItems.map(normalizeFeedXmlItem);
+      const feedUrls = getFeedUrls();
+      if (!feedUrls.length) throw new Error('Enter at least one feed URL');
+      appendLog(`Loading feeds from ${feedUrls.length} source(s)…`);
+
+      const settled = await Promise.allSettled(feedUrls.map(async feedUrl => {
+        const raw = await fetchFeedText(feedUrl);
+        const sourceItems = parseFeedItems(raw);
+        appendLog(`Loaded ${sourceItems.length} story candidate(s) from ${feedUrl}.`, 'good');
+        return sourceItems;
+      }));
+
+      const items = [];
+      settled.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          items.push(...result.value);
+          return;
+        }
+        appendLog(`Feed source failed (${feedUrls[index]}): ${result.reason?.message || result.reason || 'Unknown error'}`, 'warn');
+      });
+
+      if (!items.length) {
+        throw new Error('No stories were loaded from any configured feed source');
       }
+
+      const sortedItems = [...items].sort((a, b) => {
+        const aDate = parseTimestamp(a?.publishedAt);
+        const bDate = parseTimestamp(b?.publishedAt);
+        return bDate - aDate;
+      });
       const deduped = [];
       const seen = new Set();
-      for (const item of items) {
+      for (const item of sortedItems) {
         const candidate = {
           ...item,
           title: norm(item.title),
@@ -1189,7 +1293,8 @@
           publishedAt: norm(item.publishedAt),
           image: norm(item.image),
         };
-        if (!candidate.title || (!candidate.link && !candidate.guid)) continue;
+        const dedupSource = getPreferredArticleLink(candidate) || norm(candidate.guid);
+        if (!candidate.title || !dedupSource) continue;
         candidate.identifier = await buildArticleIdentifier(candidate);
         const key = candidate.identifier;
         if (seen.has(key)) continue;
@@ -1197,7 +1302,7 @@
         deduped.push(candidate);
         if (deduped.length >= 10) break;
       }
-      appendLog(`Loaded ${deduped.length} AP breaking-news story(s) from the feed.`, 'good');
+      appendLog(`Loaded ${deduped.length} breaking-news story(s) after merging sources.`, 'good');
       return deduped;
     }
 
@@ -1255,8 +1360,8 @@
         const aRank = a.hasFeed && !a.hasP2fk ? 0 : a.hasFeed && a.hasP2fk ? 1 : 2;
         const bRank = b.hasFeed && !b.hasP2fk ? 0 : b.hasFeed && b.hasP2fk ? 1 : 2;
         if (aRank !== bRank) return aRank - bRank;
-        const aDate = Date.parse(a.feedItems[0]?.publishedAt || a.p2fkItems[0]?.blockDate || 0) || 0;
-        const bDate = Date.parse(b.feedItems[0]?.publishedAt || b.p2fkItems[0]?.blockDate || 0) || 0;
+        const aDate = parseTimestamp(a.feedItems[0]?.publishedAt || a.p2fkItems[0]?.blockDate);
+        const bDate = parseTimestamp(b.feedItems[0]?.publishedAt || b.p2fkItems[0]?.blockDate);
         return bDate - aDate;
       });
       S.comparisonRows = rows;
@@ -1304,11 +1409,11 @@
     async function analyze() {
       const keyword = cleanKeyword($('keywordInput').value);
       if (!keyword) {
-        setStatus('analysisStatus', 'A p2fk keyword is required before scanning the AP feed.', 'bad');
+        setStatus('analysisStatus', 'A p2fk keyword is required before scanning the feeds.', 'bad');
         return false;
       }
-      setStatus('analysisStatus', 'Scanning the AP feed and current p2fk keyword…');
-      appendLog(`Starting AP scan for #${keyword}.`);
+      setStatus('analysisStatus', 'Scanning the feeds and current p2fk keyword…');
+      appendLog(`Starting feed scan for #${keyword}.`);
       try {
         S.keyword = keyword;
         const [p2fkItems, feedItems] = await Promise.all([loadP2fkItems(keyword), loadFeedItems()]);
@@ -1380,7 +1485,7 @@
     function scheduleNextScan(reason) {
       if (!S.syncRunning || S.nextScanTimer) return;
       const delay = getScanDelayMs();
-      appendLog(`${reason}: next AP feed scan scheduled in ${Math.round(delay / 60000)} minute(s).`, 'good');
+      appendLog(`${reason}: next feed scan scheduled in ${Math.round(delay / 60000)} minute(s).`, 'good');
       S.nextScanTimer = setTimeout(async () => {
         S.nextScanTimer = null;
         await runScanAndQueue();
@@ -1405,7 +1510,23 @@
             article.sourceLink = extractPreferredArticleLink(article.rawDescription);
           }
           const fetchedLinks = new Set();
-          const linkQueue = unique([getPreferredArticleLink(article), article?.sourceLink, article?.link].map(norm).filter(Boolean));
+          const preferredLink = getPreferredArticleLink(article);
+          const unwrappedPreferredLink = unwrapGoogleNewsUrl(preferredLink);
+          const unwrappedSourceLink = unwrapGoogleNewsUrl(article?.sourceLink);
+          const unwrappedLink = unwrapGoogleNewsUrl(article?.link);
+          const linkScore = (link) => {
+            if (isApNewsUrl(link)) return LINK_PRIORITY_AP;
+            if (isGoogleCall(link)) return LINK_PRIORITY_GOOGLE;
+            return LINK_PRIORITY_OTHER;
+          };
+          const linkQueue = unique([
+            unwrappedPreferredLink,
+            unwrappedSourceLink,
+            unwrappedLink,
+            preferredLink,
+            article?.sourceLink,
+            article?.link,
+          ].map(norm).filter(Boolean)).sort((a, b) => linkScore(a) - linkScore(b));
           if (linkQueue.length && !article.resolvedLink) article.resolvedLink = linkQueue[0];
           while (linkQueue.length && !article.fullText) {
             const currentLink = linkQueue.shift();
