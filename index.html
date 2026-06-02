@@ -391,9 +391,13 @@
     };
     const unique = arr => [...new Set(arr.filter(Boolean))];
     const cleanKeyword = value => norm(value).replace(/^#/, '');
+    const parseTimestamp = value => {
+      const parsed = Date.parse(String(value || ''));
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
     const fmtPublished = value => {
-      const n = Date.parse(value || '');
-      return Number.isFinite(n) ? new Date(n).toLocaleString() : 'Unknown';
+      const timestamp = parseTimestamp(value);
+      return timestamp ? new Date(timestamp).toLocaleString() : 'Unknown';
     };
     const isImageUrl = value => {
       try {
@@ -425,7 +429,7 @@
     function getApiBase() { return norm($('apiBaseInput').value) || 'https://p2fk.io'; }
     function getMempoolApi() { return norm($('mempoolInput').value) || 'https://mempool.space/testnet/api'; }
     function parseFeedUrlList(value) {
-      return unique(String(value || '').split(/[\n,]+/).map(norm).filter(Boolean));
+      return unique(String(value || '').split(/[\n,]/).map(norm).filter(Boolean));
     }
     function getFeedUrls() {
       const configured = parseFeedUrlList($('feedUrlInput').value);
@@ -1170,17 +1174,18 @@
       };
       const primaryUrl = getPreferredArticleLink(article) || norm(article.guid);
       const normalizedUrl = normalizeIdentifierUrl(primaryUrl);
-      if (normalizedUrl) {
-        return `APID:${(await sha256hex(normalizedUrl)).slice(0, 24).toUpperCase()}`;
-      }
-      const fallbackSeed = [norm(article.title), norm(article.publishedAt), norm(article.guid)].filter(Boolean).join('|');
-      if (!fallbackSeed) throw new Error('Article is missing required fields (url, title, publishedAt, or guid) for stable identifier generation');
-      return `APID:${(await sha256hex(fallbackSeed)).slice(0, 24).toUpperCase()}`;
+      if (!normalizedUrl) throw new Error('Article is missing URL fields (link, sourceLink, or guid) for stable identifier generation');
+      return `APID:${(await sha256hex(normalizedUrl)).slice(0, 24).toUpperCase()}`;
     }
 
     function parseFeedItems(raw) {
       if (/^\s*[\[{]/.test(raw)) {
-        const payload = JSON.parse(raw);
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch (error) {
+          throw new Error(`Feed returned invalid JSON: ${error.message}`);
+        }
         const jsonItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : []);
         return jsonItems.map(normalizeFeedJsonItem);
       }
@@ -1270,8 +1275,8 @@
       }
 
       const sortedItems = [...items].sort((a, b) => {
-        const aDate = Date.parse(a?.publishedAt || 0) || 0;
-        const bDate = Date.parse(b?.publishedAt || 0) || 0;
+        const aDate = parseTimestamp(a?.publishedAt);
+        const bDate = parseTimestamp(b?.publishedAt);
         return bDate - aDate;
       });
       const deduped = [];
@@ -1355,8 +1360,8 @@
         const aRank = a.hasFeed && !a.hasP2fk ? 0 : a.hasFeed && a.hasP2fk ? 1 : 2;
         const bRank = b.hasFeed && !b.hasP2fk ? 0 : b.hasFeed && b.hasP2fk ? 1 : 2;
         if (aRank !== bRank) return aRank - bRank;
-        const aDate = Date.parse(a.feedItems[0]?.publishedAt || a.p2fkItems[0]?.blockDate || 0) || 0;
-        const bDate = Date.parse(b.feedItems[0]?.publishedAt || b.p2fkItems[0]?.blockDate || 0) || 0;
+        const aDate = parseTimestamp(a.feedItems[0]?.publishedAt || a.p2fkItems[0]?.blockDate);
+        const bDate = parseTimestamp(b.feedItems[0]?.publishedAt || b.p2fkItems[0]?.blockDate);
         return bDate - aDate;
       });
       S.comparisonRows = rows;
@@ -1408,7 +1413,7 @@
         return false;
       }
       setStatus('analysisStatus', 'Scanning the feeds and current p2fk keyword…');
-      appendLog(`Starting AP scan for #${keyword}.`);
+      appendLog(`Starting feed scan for #${keyword}.`);
       try {
         S.keyword = keyword;
         const [p2fkItems, feedItems] = await Promise.all([loadP2fkItems(keyword), loadFeedItems()]);
