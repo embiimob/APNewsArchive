@@ -218,7 +218,7 @@
         <h1>APNewsArchive</h1>
         <p>Single-file local utility for scanning the AP breaking-news feed, comparing the top 10 stories against a p2fk keyword, and etching only the missing stories with SupSpace-friendly formatting.</p>
       </div>
-      <div class="mini">Open this file in a modern browser. Remote feed fetches may require a working HTTPS CORS proxy; the app will also try a few built-in public proxy fallbacks automatically. Wallet operations are testnet3-only.</div>
+      <div class="mini">Open this file locally in a modern browser. Wallet operations are testnet3-only.</div>
     </div>
 
     <div class="grid">
@@ -251,8 +251,8 @@
         </div>
         <div class="field-row">
           <div class="field">
-            <label for="feedProxyInput">Feed/article proxy template</label>
-            <input id="feedProxyInput" value="https://corsproxy.io/?{{url}}" autocomplete="off" spellcheck="false">
+            <label for="feedProxyInput">Feed proxy template</label>
+            <input id="feedProxyInput" value="https://api.allorigins.win/get?url={{url}}" autocomplete="off" spellcheck="false">
           </div>
           <div class="field">
             <label for="pollMinutesInput">Rescan delay after a completed batch (minutes)</label>
@@ -335,13 +335,7 @@
     const UNSAFE_RE = /[^a-zA-Z0-9._-]/g;
     const ADDR_RE = /^[mn][1-9A-HJ-NP-Za-km-z]{25,34}$/;
     const TXID_RE = /^[0-9a-fA-F]{64}$/;
-    const HEADLINE_PADDING_MAX = 48; // Allow up to 48 extra characters for short source/date suffixes when de-duplicating headline echoes.
-    const DEFAULT_PROXY_TEMPLATES = [
-      'https://corsproxy.io/?{{url}}',
-      'https://api.codetabs.com/v1/proxy?quest={{url}}',
-      'https://api.allorigins.win/raw?url={{url}}',
-      'https://api.allorigins.win/get?url={{url}}',
-    ];
+    const HEADLINE_PADDING_MAX = 14;
 
     const S = {
       priv: null,
@@ -413,53 +407,7 @@
     function getApiBase() { return norm($('apiBaseInput').value) || 'https://p2fk.io'; }
     function getMempoolApi() { return norm($('mempoolInput').value) || 'https://mempool.space/testnet/api'; }
     function getFeedUrl() { return norm($('feedUrlInput').value) || 'https://news.google.com/rss/search?q=site:apnews.com'; }
-    function getFeedProxyTemplate() { return norm($('feedProxyInput').value); }
-    function buildProxyTarget(template, url) {
-      const value = norm(template);
-      if (!value) return '';
-      const encodedUrl = encodeURIComponent(url);
-      if (value.includes('{{url}}')) return value.replaceAll('{{url}}', encodedUrl);
-      if (/[?&](?:url|quest|target|dest|uri)=$/i.test(value)) return `${value}${encodedUrl}`;
-      if (value.endsWith('?') || value.endsWith('&')) return `${value}${encodedUrl}`;
-      return `${value}${value.includes('?') ? '&' : '?'}url=${encodedUrl}`;
-    }
-    function getProxyTargets(url, includeDirect = true) {
-      return unique([
-        buildProxyTarget(getFeedProxyTemplate(), url),
-        ...DEFAULT_PROXY_TEMPLATES.map(template => buildProxyTarget(template, url)),
-        includeDirect ? url : '',
-      ]);
-    }
-    function unwrapProxyPayload(text) {
-      if (!/^\s*\{/.test(text)) return text;
-      try {
-        const payload = JSON.parse(text);
-        if (typeof payload?.contents === 'string' && payload.contents.trim()) return payload.contents;
-        if (typeof payload?.body === 'string' && payload.body.trim()) return payload.body;
-        if (typeof payload?.data === 'string' && payload.data.trim()) return payload.data;
-      } catch {}
-      return text;
-    }
-    async function fetchRemoteText(url, { includeDirect = true, timeout = 30000 } = {}) {
-      const targets = getProxyTargets(url, includeDirect);
-      let lastError = new Error(`Failed to fetch ${url}`);
-      for (const target of targets) {
-        const ac = new AbortController();
-        const id = setTimeout(() => ac.abort(), timeout);
-        try {
-          const res = await fetch(target, { cache: 'no-store', signal: ac.signal });
-          if (!res.ok) throw new Error(`Request failed with HTTP ${res.status}`);
-          const text = unwrapProxyPayload(await res.text());
-          if (text.trim()) return text;
-          throw new Error('Response was empty');
-        } catch (error) {
-          lastError = error;
-        } finally {
-          clearTimeout(id);
-        }
-      }
-      throw lastError;
-    }
+    function getFeedProxyTemplate() { return norm($('feedProxyInput').value) || 'https://api.allorigins.win/get?url={{url}}'; }
     function getScanDelayMs() {
       const minutes = Math.max(1, Number($('pollMinutesInput').value || 5) || 5);
       return minutes * 60 * 1000;
@@ -524,9 +472,6 @@
         if (state.status === 'broadcasted') statusPills.push('<span class="pill warn">Broadcasted</span>');
         if (state.status === 'confirmed') statusPills.push('<span class="pill good">Confirmed</span>');
         if (state.status === 'error') statusPills.push(`<span class="pill bad">${esc(shortText(state.error || 'Error', 50))}</span>`);
-        const articleLink = getPreferredArticleLink(article);
-        const articleDescription = shortText(article?.description || '', 220);
-        const articleDescriptionFallback = article?.title ? 'Feed only exposed the headline.' : 'No feed details available.';
         return `
           <tr>
             <td>
@@ -536,11 +481,10 @@
             <td>
               <div><strong>${esc(article?.title || '—')}</strong></div>
               <div class="mini">${esc(fmtPublished(article?.publishedAt))}</div>
-              ${articleLink ? `<div class="mini"><a href="${esc(articleLink)}" target="_blank" rel="noreferrer">Open AP story</a></div>` : ''}
+              ${getPreferredArticleLink(article) ? `<div class="mini"><a href="${esc(getPreferredArticleLink(article))}" target="_blank" rel="noreferrer">Open AP story</a></div>` : ''}
             </td>
             <td>
-              <div>${esc(articleDescription || articleDescriptionFallback)}</div>
-              ${articleLink ? `<div class="mini"><a href="${esc(articleLink)}" target="_blank" rel="noreferrer">Story link</a></div>` : ''}
+              <div>${esc(shortText(article?.description || '', 220) || 'No description')}</div>
               ${article?.image ? `<div class="mini">${esc(isImageUrl(article.image) ? `Image attachment: ${shortText(article.image, 96)}` : `Image link: ${shortText(article.image, 96)}`)}</div>` : '<div class="mini">No image found in feed.</div>'}
             </td>
             <td>
@@ -596,17 +540,34 @@
     }
 
     async function fetchFeedText(url) {
-      try {
-        return await fetchRemoteText(url, { includeDirect: true, timeout: 30000 });
-      } catch (lastError) {
-      if (location.protocol === 'file:') {
-        throw new Error('Feed fetch was blocked by browser CORS on file://. Serve this HTML over HTTP/HTTPS or use a working feed proxy.');
-      }
-      if (location.protocol === 'https:') {
-        throw new Error(`Feed fetch failed. The configured proxy and built-in HTTPS fallbacks were blocked or unavailable. Update Feed/article proxy template to a working HTTPS CORS proxy. Last error: ${lastError.message}`);
+      const template = getFeedProxyTemplate();
+      const targets = unique([
+        template.includes('{{url}}') ? template.replace('{{url}}', encodeURIComponent(url)) : '',
+        url,
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      ]);
+      let lastError = new Error('Failed to fetch feed from any available source');
+      for (const target of targets) {
+        const ac = new AbortController();
+        const id = setTimeout(() => ac.abort(), 30000);
+        try {
+          const res = await fetch(target, { cache: 'no-store', signal: ac.signal });
+          if (!res.ok) throw new Error(`Feed request failed with HTTP ${res.status}`);
+          const text = await res.text();
+          if (/^\s*\{/.test(text)) {
+            const payload = JSON.parse(text);
+            if (typeof payload?.contents === 'string' && payload.contents.trim()) return payload.contents;
+          }
+          if (text.trim()) return text;
+          throw new Error('Feed response was empty');
+        } catch (error) {
+          lastError = error;
+        } finally {
+          clearTimeout(id);
+        }
       }
       throw lastError;
-      }
     }
 
     function parseMsg(text) {
@@ -988,24 +949,9 @@
         .trim();
     }
 
-    function stripDescriptionBoilerplate(value) {
-      let text = norm(value).replace(/\s+/g, ' ');
-      if (!text) return '';
-      const suffixes = [
-        /\s*(?:[-–—|•·]\s*)?(?:ap news|associated press|google news)\s*$/i,
-        /\s*(?:[-–—|•·]\s*)?\d+\s+(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago\s*$/i,
-      ];
-      let prev = '';
-      while (text && text !== prev) {
-        prev = text;
-        suffixes.forEach(re => { text = text.replace(re, '').trim(); });
-      }
-      return text;
-    }
-
     function isDuplicateHeadline(text, title) {
-      const normalizedText = normalizeLooseText(stripDescriptionBoilerplate(text));
-      const normalizedTitle = normalizeLooseText(stripDescriptionBoilerplate(title));
+      const normalizedText = normalizeLooseText(text);
+      const normalizedTitle = normalizeLooseText(title);
       if (!normalizedText || !normalizedTitle) return false;
       if (normalizedText === normalizedTitle) return true;
       if (normalizedText.startsWith(normalizedTitle) && normalizedText.length - normalizedTitle.length <= HEADLINE_PADDING_MAX) return true;
@@ -1014,9 +960,9 @@
     }
 
     function cleanArticleDescription(rawDescription, title) {
-      const plain = stripDescriptionBoilerplate(stripHtml(rawDescription));
+      const plain = stripHtml(rawDescription);
       if (!plain) return '';
-      const parts = plain.split(/\n+|\s{2,}/).map(stripDescriptionBoilerplate).filter(Boolean);
+      const parts = plain.split(/\n+|\s{2,}/).map(norm).filter(Boolean);
       if (!parts.length) return '';
       const filtered = parts.filter(part => !isDuplicateHeadline(part, title));
       if (filtered.length) return filtered.join(' ');
@@ -1037,7 +983,6 @@
     }
 
     function getPreferredArticleLink(article) {
-      // Prefer links in the order they become more specific to the real AP article.
       return norm(article?.resolvedLink || article?.sourceLink || article?.link);
     }
 
@@ -1301,7 +1246,7 @@
       const article = row.feedItems[0];
       const prefix = sanitize($('messagePrefixInput').value);
       const articleLink = getPreferredArticleLink(article);
-      const description = norm(article?.description);
+      const description = cleanArticleDescription(article?.description || '', article?.title || '');
       const bits = [];
       if (prefix) bits.push(prefix);
       bits.push('AP Breaking News');
@@ -1352,8 +1297,20 @@
           }
           const articleLink = getPreferredArticleLink(article);
           if (articleLink && articleLink.includes('apnews.com')) {
+            const template = getFeedProxyTemplate();
             article.resolvedLink = articleLink;
-            const articleHtml = await fetchRemoteText(articleLink, { includeDirect: false, timeout: 30000 });
+            const target = template.includes('{{url}}') ? template.replace('{{url}}', encodeURIComponent(articleLink)) : `${template}?url=${encodeURIComponent(articleLink)}`;
+            const articleRes = await fetch(target);
+            const articleText = await articleRes.text();
+            let articleHtml = articleText;
+            if (/^\s*\{/.test(articleText)) {
+              try {
+                const payload = JSON.parse(articleText);
+                articleHtml = payload?.contents || '';
+              } catch (error) {
+                appendLog(`Warning: Failed to parse proxied AP payload for ${identifier}: ${error.message}`, 'warn');
+              }
+            }
             const articleBox = document.createElement('div');
             articleBox.innerHTML = articleHtml;
             const targetNode = articleBox.querySelector('.RichTextStoryBody') || articleBox.querySelector('.Article') || articleBox.querySelector('.article-body') || articleBox.querySelector('.story') || articleBox.querySelector('main') || articleBox;
