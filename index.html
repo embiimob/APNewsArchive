@@ -1453,6 +1453,7 @@
           const unwrappedPreferredLink = unwrapGoogleNewsUrl(preferredLink);
           const unwrappedSourceLink = unwrapGoogleNewsUrl(article?.sourceLink);
           const unwrappedLink = unwrapGoogleNewsUrl(article?.link);
+          const linkScore = link => (isApNewsUrl(link) ? LINK_PRIORITY_AP : (isGoogleCall(link) ? LINK_PRIORITY_GOOGLE : LINK_PRIORITY_OTHER));
           const linkQueue = unique([
             unwrappedPreferredLink,
             unwrappedSourceLink,
@@ -1460,10 +1461,7 @@
             preferredLink,
             article?.sourceLink,
             article?.link,
-          ].map(norm).filter(Boolean)).sort((a, b) => {
-            const score = link => (isApNewsUrl(link) ? LINK_PRIORITY_AP : (isGoogleCall(link) ? LINK_PRIORITY_GOOGLE : LINK_PRIORITY_OTHER));
-            return score(a) - score(b);
-          });
+          ].map(norm).filter(Boolean)).sort((a, b) => linkScore(a) - linkScore(b));
           if (linkQueue.length && !article.resolvedLink) article.resolvedLink = linkQueue[0];
           while (linkQueue.length && !article.fullText) {
             const currentLink = linkQueue.shift();
