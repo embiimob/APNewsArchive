@@ -1145,9 +1145,10 @@
       const rawDescription = String(item?.description || item?.content || item?.summary || '');
       const image = norm(item?.thumbnail || item?.enclosure?.link || item?.enclosure?.url || item?.image || extractHtmlImage(rawDescription));
       const title = norm(item?.title);
+      const feedLink = norm(item?.link);
       return {
         title,
-        link: unwrapGoogleNewsUrl(item?.link) || norm(item?.link),
+        link: unwrapGoogleNewsUrl(feedLink) || feedLink,
         sourceLink: extractPreferredArticleLink(rawDescription),
         guid: norm(item?.guid),
         rawDescription,
@@ -1179,12 +1180,13 @@
       const rawDescription = queryText(node, ['description', 'content\\:encoded', 'summary']);
       const linkFromAtom = queryAttr(node, ['link[href]'], 'href');
       const linkFromText = queryText(node, ['link']);
+      const feedLink = linkFromAtom || linkFromText;
       const image = queryAttr(node, ['enclosure[type^="image/"]', 'media\\:content[url]', 'media\\:thumbnail[url]'])
         || extractHtmlImage(rawDescription);
       const title = queryText(node, ['title']);
       return {
         title,
-        link: unwrapGoogleNewsUrl(linkFromAtom || linkFromText) || linkFromAtom || linkFromText,
+        link: unwrapGoogleNewsUrl(feedLink) || feedLink,
         sourceLink: extractPreferredArticleLink(rawDescription),
         guid: queryText(node, ['guid', 'id']),
         rawDescription,
