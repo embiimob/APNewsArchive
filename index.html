@@ -976,7 +976,7 @@
       return isDuplicateHeadline(plain, title) ? '' : plain;
     }
 
-    function escRe(value) {
+    function escapeRegexPattern(value) {
       return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
@@ -987,7 +987,7 @@
       const normalizedText = normalizeLooseText(cleanText);
       const normalizedTitle = normalizeLooseText(cleanTitle);
       if (!isDuplicateHeadline(cleanText, cleanTitle) && !normalizedText.startsWith(normalizedTitle)) return cleanText;
-      const matcher = new RegExp(`^\\s*${escRe(cleanTitle)}(?:\\s*[-–—:|•]+\\s*)?`, 'i');
+      const matcher = new RegExp(`^\\s*${escapeRegexPattern(cleanTitle)}(?:\\s*[-–—:|•]+\\s*)?`, 'i');
       return norm(cleanText.replace(matcher, ''));
     }
 
@@ -1013,8 +1013,15 @@
       box.innerHTML = String(html || '');
       const apAnchor = box.querySelector('a[href*="apnews.com"], link[href*="apnews.com"], meta[content*="apnews.com"]');
       if (!apAnchor) return '';
-      if (apAnchor.hasAttribute('href')) return norm(apAnchor.getAttribute('href') || '');
-      return norm(apAnchor.getAttribute('content') || '');
+      const rawUrl = apAnchor.hasAttribute('href')
+        ? norm(apAnchor.getAttribute('href') || '')
+        : norm(apAnchor.getAttribute('content') || '');
+      try {
+        const hostname = new URL(rawUrl).hostname.toLowerCase();
+        return hostname.includes('apnews.com') ? rawUrl : '';
+      } catch {
+        return '';
+      }
     }
 
     function extractArticleBodyText(html) {
