@@ -942,10 +942,13 @@
       return [...recipients].map(addr => ({ addr, amount: AMOUNT_PER }));
     }
 
+    function parseHtmlDoc(input) {
+      return new DOMParser().parseFromString(String(input || ''), 'text/html');
+    }
+
     function stripHtml(input) {
-      const box = document.createElement('div');
-      box.innerHTML = String(input || '');
-      return norm(box.textContent || box.innerText || '');
+      const doc = parseHtmlDoc(input);
+      return norm(doc.body?.textContent || '');
     }
 
     function normalizeLooseText(value) {
@@ -976,7 +979,7 @@
       return isDuplicateHeadline(plain, title) ? '' : plain;
     }
 
-    function escapeRegexPattern(value) {
+    function escapeRegExpSpecialChars(value) {
       return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
@@ -987,8 +990,8 @@
       const normalizedText = normalizeLooseText(cleanText);
       const normalizedTitle = normalizeLooseText(cleanTitle);
       if (!isDuplicateHeadline(cleanText, cleanTitle) && !normalizedText.startsWith(normalizedTitle)) return cleanText;
-      const matcher = new RegExp(`^\\s*${escapeRegexPattern(cleanTitle)}(?:\\s*[-–—:|•]+\\s*)?`, 'i');
-      return norm(cleanText.replace(matcher, ''));
+      const titlePrefixPattern = new RegExp(`^\\s*${escapeRegExpSpecialChars(cleanTitle)}(?:\\s*[-–—:|•]+\\s*)?`, 'i');
+      return norm(cleanText.replace(titlePrefixPattern, ''));
     }
 
     function isSubstantiveStoryText(value) {
@@ -1001,17 +1004,15 @@
     }
 
     function extractCanonicalLinkFromHtml(html) {
-      const box = document.createElement('div');
-      box.innerHTML = String(html || '');
-      const canonical = norm(box.querySelector('link[rel="canonical"][href]')?.getAttribute('href') || '')
-        || norm(box.querySelector('meta[property="og:url"][content]')?.getAttribute('content') || '');
+      const doc = parseHtmlDoc(html);
+      const canonical = norm(doc.querySelector('link[rel="canonical"][href]')?.getAttribute('href') || '')
+        || norm(doc.querySelector('meta[property="og:url"][content]')?.getAttribute('content') || '');
       return canonical;
     }
 
     function extractApLinkFromHtml(html) {
-      const box = document.createElement('div');
-      box.innerHTML = String(html || '');
-      const apAnchor = box.querySelector('a[href*="apnews.com"], link[href*="apnews.com"], meta[content*="apnews.com"]');
+      const doc = parseHtmlDoc(html);
+      const apAnchor = doc.querySelector('a[href*="apnews.com"], link[href*="apnews.com"], meta[content*="apnews.com"]');
       if (!apAnchor) return '';
       const rawUrl = apAnchor.hasAttribute('href')
         ? norm(apAnchor.getAttribute('href') || '')
@@ -1025,9 +1026,8 @@
     }
 
     function extractArticleBodyText(html) {
-      const box = document.createElement('div');
-      box.innerHTML = String(html || '');
-      const candidates = [
+      const doc = parseHtmlDoc(html);
+      const articleBodySelectors = [
         '.RichTextStoryBody',
         'article',
         '.Article',
@@ -1035,12 +1035,12 @@
         '.story',
         'main',
       ];
-      for (const selector of candidates) {
-        const node = box.querySelector(selector);
+      for (const selector of articleBodySelectors) {
+        const node = doc.querySelector(selector);
         const text = norm(node?.textContent || '').replace(/\s+/g, ' ');
         if (isSubstantiveStoryText(text)) return text.substring(0, STORY_TEXT_MAX);
       }
-      const paragraphText = [...box.querySelectorAll('p')]
+      const paragraphText = [...doc.querySelectorAll('p')]
         .map(node => norm(node.textContent || '').replace(/\s+/g, ' '))
         .filter(text => text.length >= MIN_PARAGRAPH_LENGTH)
         .slice(0, MAX_PARAGRAPHS_FOR_FALLBACK)
@@ -1055,9 +1055,8 @@
     }
 
     function extractPreferredArticleLink(rawDescription) {
-      const box = document.createElement('div');
-      box.innerHTML = String(rawDescription || '');
-      const links = [...box.querySelectorAll('a[href]')]
+      const doc = parseHtmlDoc(rawDescription);
+      const links = [...doc.querySelectorAll('a[href]')]
         .map(link => norm(link.getAttribute('href') || ''))
         .filter(Boolean);
       if (!links.length) return '';
@@ -1072,9 +1071,8 @@
     }
 
     function extractHtmlImage(input) {
-      const box = document.createElement('div');
-      box.innerHTML = String(input || '');
-      const img = box.querySelector('img[src]');
+      const doc = parseHtmlDoc(input);
+      const img = doc.querySelector('img[src]');
       return norm(img?.getAttribute('src') || '');
     }
 
@@ -1391,13 +1389,13 @@
           if (!article.sourceLink && article.rawDescription) {
             article.sourceLink = extractPreferredArticleLink(article.rawDescription);
           }
-          const visitedLinks = new Set();
+          const fetchedLinks = new Set();
           const linkQueue = unique([getPreferredArticleLink(article), article?.sourceLink, article?.link].map(norm).filter(Boolean));
           if (linkQueue.length && !article.resolvedLink) article.resolvedLink = linkQueue[0];
           while (linkQueue.length && !article.fullText) {
             const currentLink = linkQueue.shift();
-            if (!currentLink || visitedLinks.has(currentLink)) continue;
-            visitedLinks.add(currentLink);
+            if (!currentLink || fetchedLinks.has(currentLink)) continue;
+            fetchedLinks.add(currentLink);
             const articleRes = await fetch(buildProxyUrl(currentLink));
             if (!articleRes.ok) continue;
             const articleText = await articleRes.text();
@@ -1413,13 +1411,13 @@
             const canonicalLink = extractCanonicalLinkFromHtml(articleHtml);
             if (canonicalLink) {
               article.resolvedLink = canonicalLink;
-              if (!visitedLinks.has(canonicalLink)) {
+              if (!fetchedLinks.has(canonicalLink)) {
                 if (canonicalLink.includes('apnews.com')) linkQueue.unshift(canonicalLink);
                 else linkQueue.push(canonicalLink);
               }
             }
             const discoveredApLink = extractApLinkFromHtml(articleHtml);
-            if (discoveredApLink && !visitedLinks.has(discoveredApLink)) linkQueue.unshift(discoveredApLink);
+            if (discoveredApLink && !fetchedLinks.has(discoveredApLink)) linkQueue.unshift(discoveredApLink);
             const fullText = extractArticleBodyText(articleHtml);
             if (fullText) article.fullText = fullText;
           }
