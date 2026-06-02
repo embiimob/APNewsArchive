@@ -546,7 +546,7 @@
         `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
       ]);
-      let lastError = new Error('Feed request failed');
+      let lastError = new Error('Failed to fetch feed from any available source');
       for (const target of targets) {
         const ac = new AbortController();
         const id = setTimeout(() => ac.abort(), 30000);
@@ -954,7 +954,7 @@
         norm(article.title),
         norm(article.publishedAt),
       ].filter(Boolean).join('|');
-      if (!seed) throw new Error('AP article is missing a stable identifier');
+      if (!seed) throw new Error('AP article is missing required fields (guid, link, title, or publishedAt) for stable identifier generation');
       return `APID:${(await sha256hex(seed)).slice(0, 24).toUpperCase()}`;
     }
 
@@ -1045,7 +1045,7 @@
 
     async function loadP2fkItems(keyword) {
       const normalizedKeyword = cleanKeyword(keyword);
-      if (!normalizedKeyword) throw new Error('Enter a p2fk keyword');
+      if (!normalizedKeyword) throw new Error('p2fk keyword cannot be empty');
       const address = await kwAddr(normalizedKeyword);
       S.keywordAddress = address;
       appendLog(`Keyword #${normalizedKeyword} maps to ${address}.`);
