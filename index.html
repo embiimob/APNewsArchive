@@ -218,7 +218,7 @@
         <h1>APNewsArchive</h1>
         <p>Single-file local utility for scanning the AP breaking-news feed, comparing the top 10 stories against a p2fk keyword, and etching only the missing stories with SupSpace-friendly formatting.</p>
       </div>
-      <div class="mini">Open this file locally in a modern browser. Wallet operations are testnet3-only.</div>
+      <div class="mini">Open this file in a modern browser. Remote feed fetches may require a CORS-friendly proxy or serving this file over HTTP(S). Wallet operations are testnet3-only.</div>
     </div>
 
     <div class="grid">
@@ -335,7 +335,7 @@
     const UNSAFE_RE = /[^a-zA-Z0-9._-]/g;
     const ADDR_RE = /^[mn][1-9A-HJ-NP-Za-km-z]{25,34}$/;
     const TXID_RE = /^[0-9a-fA-F]{64}$/;
-    const HEADLINE_PADDING_MAX = 14; // Allow short source suffixes/prefixes (e.g., "AP News") when de-duplicating headline echoes.
+    const HEADLINE_PADDING_MAX = 48; // Allow short source/date suffixes when de-duplicating headline echoes from feed summaries.
 
     const S = {
       priv: null,
@@ -472,6 +472,8 @@
         if (state.status === 'broadcasted') statusPills.push('<span class="pill warn">Broadcasted</span>');
         if (state.status === 'confirmed') statusPills.push('<span class="pill good">Confirmed</span>');
         if (state.status === 'error') statusPills.push(`<span class="pill bad">${esc(shortText(state.error || 'Error', 50))}</span>`);
+        const articleLink = getPreferredArticleLink(article);
+        const articleDescription = shortText(article?.description || '', 220);
         return `
           <tr>
             <td>
@@ -481,10 +483,11 @@
             <td>
               <div><strong>${esc(article?.title || '—')}</strong></div>
               <div class="mini">${esc(fmtPublished(article?.publishedAt))}</div>
-              ${getPreferredArticleLink(article) ? `<div class="mini"><a href="${esc(getPreferredArticleLink(article))}" target="_blank" rel="noreferrer">Open AP story</a></div>` : ''}
+              ${articleLink ? `<div class="mini"><a href="${esc(articleLink)}" target="_blank" rel="noreferrer">Open AP story</a></div>` : ''}
             </td>
             <td>
-              <div>${esc(shortText(article?.description || '', 220) || 'No description')}</div>
+              <div>${esc(articleDescription || 'Feed only exposed the headline.')}</div>
+              ${articleLink ? `<div class="mini"><a href="${esc(articleLink)}" target="_blank" rel="noreferrer">Story link</a></div>` : ''}
               ${article?.image ? `<div class="mini">${esc(isImageUrl(article.image) ? `Image attachment: ${shortText(article.image, 96)}` : `Image link: ${shortText(article.image, 96)}`)}</div>` : '<div class="mini">No image found in feed.</div>'}
             </td>
             <td>
@@ -566,6 +569,9 @@
         } finally {
           clearTimeout(id);
         }
+      }
+      if (location.protocol === 'file:') {
+        throw new Error('Feed request failed from file:// because the browser blocked remote RSS access with CORS. Serve this HTML over HTTP(S) or use a working CORS-enabled feed proxy, then rescan.');
       }
       throw lastError;
     }
@@ -949,9 +955,24 @@
         .trim();
     }
 
+    function stripDescriptionBoilerplate(value) {
+      let text = norm(value).replace(/\s+/g, ' ');
+      if (!text) return '';
+      const suffixes = [
+        /\s*(?:[-–—|•·]\s*)?(?:ap news|associated press|google news)\s*$/i,
+        /\s*(?:[-–—|•·]\s*)?\d+\s+(?:minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago\s*$/i,
+      ];
+      let prev = '';
+      while (text && text !== prev) {
+        prev = text;
+        suffixes.forEach(re => { text = text.replace(re, '').trim(); });
+      }
+      return text;
+    }
+
     function isDuplicateHeadline(text, title) {
-      const normalizedText = normalizeLooseText(text);
-      const normalizedTitle = normalizeLooseText(title);
+      const normalizedText = normalizeLooseText(stripDescriptionBoilerplate(text));
+      const normalizedTitle = normalizeLooseText(stripDescriptionBoilerplate(title));
       if (!normalizedText || !normalizedTitle) return false;
       if (normalizedText === normalizedTitle) return true;
       if (normalizedText.startsWith(normalizedTitle) && normalizedText.length - normalizedTitle.length <= HEADLINE_PADDING_MAX) return true;
@@ -960,9 +981,9 @@
     }
 
     function cleanArticleDescription(rawDescription, title) {
-      const plain = stripHtml(rawDescription);
+      const plain = stripDescriptionBoilerplate(stripHtml(rawDescription));
       if (!plain) return '';
-      const parts = plain.split(/\n+|\s{2,}/).map(norm).filter(Boolean);
+      const parts = plain.split(/\n+|\s{2,}/).map(stripDescriptionBoilerplate).filter(Boolean);
       if (!parts.length) return '';
       const filtered = parts.filter(part => !isDuplicateHeadline(part, title));
       if (filtered.length) return filtered.join(' ');
