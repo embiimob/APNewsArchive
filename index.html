@@ -252,7 +252,7 @@
         <div class="field-row">
           <div class="field">
             <label for="feedProxyInput">Feed proxy template</label>
-            <input id="feedProxyInput" value="https://api.allorigins.win/raw?url={{url}}" autocomplete="off" spellcheck="false">
+            <input id="feedProxyInput" value="https://api.allorigins.win/get?url={{url}}" autocomplete="off" spellcheck="false">
           </div>
           <div class="field">
             <label for="pollMinutesInput">Rescan delay after a completed batch (minutes)</label>
@@ -328,7 +328,6 @@
     const CHANGE_COUNT = 2;
     const CHANGE_PREFIX = 'sup:testnet3:change:';
     const AMOUNT_PER = DUST / 1e8;
-    const MAX_IPFS_BYTES = 100 * 1024 * 1024;
     const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
     const DELIMITERS = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
     const CID_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/i;
@@ -407,7 +406,7 @@
     function getApiBase() { return norm($('apiBaseInput').value) || 'https://p2fk.io'; }
     function getMempoolApi() { return norm($('mempoolInput').value) || 'https://mempool.space/testnet/api'; }
     function getFeedUrl() { return norm($('feedUrlInput').value) || 'https://feeds.apnews.com/apnews/breaking-news'; }
-    function getFeedProxyTemplate() { return norm($('feedProxyInput').value) || 'https://api.allorigins.win/raw?url={{url}}'; }
+    function getFeedProxyTemplate() { return norm($('feedProxyInput').value) || 'https://api.allorigins.win/get?url={{url}}'; }
     function getScanDelayMs() {
       const minutes = Math.max(1, Number($('pollMinutesInput').value || 5) || 5);
       return minutes * 60 * 1000;
@@ -527,105 +526,6 @@
       `).join('');
     }
 
-    function buildIpfsUrl(cid, path = '') {
-      return `${getGatewayBase()}${cid}${path ? `/${path.replace(/^\/+/, '')}` : ''}`;
-    }
-
-    function extFromMime(mime) {
-      const value = norm(mime).toLowerCase().split(';')[0].trim();
-      const map = {
-        'image/gif': 'gif',
-        'image/jpeg': 'jpg',
-        'image/jpg': 'jpg',
-        'image/png': 'png',
-        'image/webp': 'webp',
-        'image/svg+xml': 'svg',
-        'video/mp4': 'mp4',
-        'audio/mpeg': 'mp3',
-        'audio/mp3': 'mp3',
-        'audio/wav': 'wav',
-        'audio/x-wav': 'wav',
-        'application/pdf': 'pdf',
-        'application/json': 'json',
-        'text/plain': 'txt',
-        'text/html': 'html',
-        'model/gltf+json': 'gltf',
-        'model/gltf-binary': 'glb',
-      };
-      return map[value] || '';
-    }
-
-    function ensureAttachmentFilename(path, mime = '') {
-      const clean = norm(path).replace(/^\/+/, '').split('/').map(p => p.replace(UNSAFE_RE, '')).filter(Boolean).join('/');
-      const segments = clean ? clean.split('/').filter(Boolean) : [];
-      const tail = segments[segments.length - 1] || '';
-      if (/\.[a-z0-9]{1,16}$/i.test(tail)) return clean;
-      const fallback = `artifact.${extFromMime(mime) || 'bin'}`;
-      if (!clean) return fallback;
-      return `${clean}/${fallback}`;
-    }
-
-    function extractIpfsParts(v) {
-      const input = norm(v);
-      if (!input) return null;
-      if (/^ipfs:/i.test(input)) {
-        const body = input.replace(/^ipfs:/i, '').replace(/^\/+/, '');
-        const [first, ...parts] = body.split(/[\\/]+/).filter(Boolean);
-        const cid = norm(first || '');
-        return CID_RE.test(cid) ? { cid, path: parts.join('/') } : null;
-      }
-      const loose = input.match(/(Qm[1-9A-HJ-NP-Za-km-z]{44})(?:[\\/]+([^<>\s]+))?/i);
-      if (loose) return { cid: loose[1], path: norm(loose[2] || '') };
-      try {
-        const u = new URL(input);
-        const hostSplit = norm(u.hostname).split('.ipfs.');
-        if (hostSplit.length > 1 && CID_RE.test(hostSplit[0])) return { cid: hostSplit[0], path: norm(u.pathname).replace(/^\/+/, '') };
-        const pathMatch = norm(u.pathname).match(IPFS_PATH_RE);
-        if (pathMatch && CID_RE.test(pathMatch[1])) return { cid: pathMatch[1], path: norm(pathMatch[2] || '') };
-      } catch {}
-      return null;
-    }
-
-    async function normalizeAttach(raw, options = {}) {
-      const input = norm(raw);
-      if (!input) throw new Error('Missing attachment reference');
-      const ipfs = extractIpfsParts(input);
-      if (!ipfs?.cid) throw new Error('Attachment must contain an IPFS CID');
-      const safePath = ensureAttachmentFilename(ipfs.path || '', options.mime || '');
-      return {
-        cid: ipfs.cid,
-        path: safePath,
-        canonical: `IPFS:${ipfs.cid}${safePath ? `/${safePath}` : ''}`,
-        preview: buildIpfsUrl(ipfs.cid, safePath),
-      };
-    }
-
-    function extractCidsFromText(input) {
-      const found = [];
-      const text = String(input ?? '');
-      const matches = text.match(/\b(Qm[1-9A-HJ-NP-Za-km-z]{44})\b/ig) || [];
-      matches.forEach(cid => { if (CID_RE.test(cid)) found.push(cid); });
-      return unique(found);
-    }
-
-    function collectStringValues(value, out, depth = 0) {
-      if (depth > 5 || value == null) return;
-      if (typeof value === 'string') {
-        out.push(value);
-        return;
-      }
-      if (Array.isArray(value)) {
-        value.forEach(item => collectStringValues(item, out, depth + 1));
-        return;
-      }
-      if (typeof value === 'object') {
-        Object.entries(value).forEach(([k, v]) => {
-          out.push(k);
-          collectStringValues(v, out, depth + 1);
-        });
-      }
-    }
-
     async function fetchJ(url, timeout = 20000, options = {}) {
       const ac = new AbortController();
       const id = setTimeout(() => ac.abort(), timeout);
@@ -640,16 +540,33 @@
 
     async function fetchFeedText(url) {
       const template = getFeedProxyTemplate();
-      const target = template.includes('{{url}}') ? template.replace('{{url}}', encodeURIComponent(url)) : url;
-      const ac = new AbortController();
-      const id = setTimeout(() => ac.abort(), 30000);
-      try {
-        const res = await fetch(target, { cache: 'no-store', signal: ac.signal });
-        if (!res.ok) throw new Error(`Feed request failed with HTTP ${res.status}`);
-        return await res.text();
-      } finally {
-        clearTimeout(id);
+      const targets = unique([
+        template.includes('{{url}}') ? template.replace('{{url}}', encodeURIComponent(url)) : '',
+        url,
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      ]);
+      let lastError = new Error('Feed request failed');
+      for (const target of targets) {
+        const ac = new AbortController();
+        const id = setTimeout(() => ac.abort(), 30000);
+        try {
+          const res = await fetch(target, { cache: 'no-store', signal: ac.signal });
+          if (!res.ok) throw new Error(`Feed request failed with HTTP ${res.status}`);
+          const text = await res.text();
+          if (/^\s*\{/.test(text)) {
+            const payload = JSON.parse(text);
+            if (typeof payload?.contents === 'string' && payload.contents.trim()) return payload.contents;
+          }
+          if (text.trim()) return text;
+          throw new Error('Feed response was empty');
+        } catch (error) {
+          lastError = error;
+        } finally {
+          clearTimeout(id);
+        }
       }
+      throw lastError;
     }
 
     function parseMsg(text) {
@@ -1031,7 +948,12 @@
     }
 
     async function buildArticleIdentifier(article) {
-      const seed = norm(article.guid || article.link || `${article.title}|${article.publishedAt}`);
+      const seed = [
+        norm(article.guid),
+        norm(article.link),
+        norm(article.title),
+        norm(article.publishedAt),
+      ].filter(Boolean).join('|');
       if (!seed) throw new Error('AP article is missing a stable identifier');
       return `APID:${(await sha256hex(seed)).slice(0, 24).toUpperCase()}`;
     }
@@ -1286,7 +1208,7 @@
     function scheduleNextScan(reason) {
       if (!S.syncRunning || S.nextScanTimer) return;
       const delay = getScanDelayMs();
-      appendLog(`${reason} Next AP feed scan scheduled in ${Math.round(delay / 60000)} minute(s).`, 'good');
+      appendLog(`${reason}: next AP feed scan scheduled in ${Math.round(delay / 60000)} minute(s).`, 'good');
       S.nextScanTimer = setTimeout(async () => {
         S.nextScanTimer = null;
         await runScanAndQueue();
@@ -1395,7 +1317,7 @@
         refreshConfirmationStates().catch(() => {});
         processAutoSync().catch(() => {});
       }, 60000);
-      appendLog('Auto archive started. The first AP scan runs now and later scans only happen five minutes after a full batch finishes.', 'good');
+      appendLog(`Auto archive started. The first AP scan runs now and later scans only happen ${Math.round(getScanDelayMs() / 60000)} minute(s) after a full batch finishes.`, 'good');
       await runScanAndQueue();
     }
 
