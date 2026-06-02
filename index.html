@@ -423,6 +423,38 @@
         return false;
       }
     }
+    function isApNewsUrl(url) {
+      try {
+        const hostname = new URL(url).hostname.toLowerCase();
+        return hostname === 'apnews.com' || hostname.endsWith('.apnews.com');
+      } catch {
+        return false;
+      }
+    }
+    function unwrapGoogleNewsUrl(url) {
+      const source = norm(url);
+      if (!source) return '';
+      if (!isGoogleCall(source)) return source;
+      try {
+        const parsed = new URL(source);
+        for (const key of ['url', 'u', 'q']) {
+          const value = norm(parsed.searchParams.get(key));
+          if (!value) continue;
+          let candidate = value;
+          for (let i = 0; i < 2; i++) {
+            try {
+              candidate = decodeURIComponent(candidate);
+            } catch {
+              break;
+            }
+          }
+          if (isApNewsUrl(candidate)) return candidate;
+        }
+      } catch {
+        return '';
+      }
+      return '';
+    }
     function buildCorsProxyUrl(url) {
       return `https://corsproxy.io/?key=f136e028&url=${encodeURIComponent(url)}`;
     }
@@ -1074,11 +1106,13 @@
       const links = [...doc.querySelectorAll('a[href]')]
         .map(link => norm(link.getAttribute('href') || ''))
         .filter(Boolean);
+      const directLinks = links.map(unwrapGoogleNewsUrl).filter(Boolean);
+      const candidates = unique([...directLinks, ...links]);
       if (!links.length) return '';
-      const directAp = links.find(link => link.includes('apnews.com'));
+      const directAp = candidates.find(link => isApNewsUrl(link));
       if (directAp) return directAp;
-      const nonGoogle = links.find(link => !link.includes('news.google.com'));
-      return nonGoogle || links[0];
+      const nonGoogle = candidates.find(link => !isGoogleCall(link));
+      return nonGoogle || candidates[0];
     }
 
     function getPreferredArticleLink(article) {
@@ -1113,7 +1147,7 @@
       const title = norm(item?.title);
       return {
         title,
-        link: norm(item?.link),
+        link: unwrapGoogleNewsUrl(item?.link) || norm(item?.link),
         sourceLink: extractPreferredArticleLink(rawDescription),
         guid: norm(item?.guid),
         rawDescription,
@@ -1150,7 +1184,7 @@
       const title = queryText(node, ['title']);
       return {
         title,
-        link: linkFromAtom || linkFromText,
+        link: unwrapGoogleNewsUrl(linkFromAtom || linkFromText) || linkFromAtom || linkFromText,
         sourceLink: extractPreferredArticleLink(rawDescription),
         guid: queryText(node, ['guid', 'id']),
         rawDescription,
@@ -1405,7 +1439,17 @@
             article.sourceLink = extractPreferredArticleLink(article.rawDescription);
           }
           const fetchedLinks = new Set();
-          const linkQueue = unique([getPreferredArticleLink(article), article?.sourceLink, article?.link].map(norm).filter(Boolean));
+          const linkQueue = unique([
+            unwrapGoogleNewsUrl(getPreferredArticleLink(article)),
+            unwrapGoogleNewsUrl(article?.sourceLink),
+            unwrapGoogleNewsUrl(article?.link),
+            getPreferredArticleLink(article),
+            article?.sourceLink,
+            article?.link,
+          ].map(norm).filter(Boolean)).sort((a, b) => {
+            const score = link => (isApNewsUrl(link) ? 0 : (isGoogleCall(link) ? 2 : 1));
+            return score(a) - score(b);
+          });
           if (linkQueue.length && !article.resolvedLink) article.resolvedLink = linkQueue[0];
           while (linkQueue.length && !article.fullText) {
             const currentLink = linkQueue.shift();
