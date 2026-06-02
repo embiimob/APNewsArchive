@@ -1108,7 +1108,7 @@
         .filter(Boolean);
       const directLinks = links.map(unwrapGoogleNewsUrl).filter(Boolean);
       const candidates = unique([...directLinks, ...links]);
-      if (!links.length) return '';
+      if (!candidates.length) return '';
       const directAp = candidates.find(link => isApNewsUrl(link));
       if (directAp) return directAp;
       const nonGoogle = candidates.find(link => !isGoogleCall(link));
@@ -1447,7 +1447,10 @@
             article?.sourceLink,
             article?.link,
           ].map(norm).filter(Boolean)).sort((a, b) => {
-            const score = link => (isApNewsUrl(link) ? 0 : (isGoogleCall(link) ? 2 : 1));
+            const PRIORITY_AP = 0;
+            const PRIORITY_OTHER = 1;
+            const PRIORITY_GOOGLE = 2;
+            const score = link => (isApNewsUrl(link) ? PRIORITY_AP : (isGoogleCall(link) ? PRIORITY_GOOGLE : PRIORITY_OTHER));
             return score(a) - score(b);
           });
           if (linkQueue.length && !article.resolvedLink) article.resolvedLink = linkQueue[0];
