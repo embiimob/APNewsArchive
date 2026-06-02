@@ -252,7 +252,7 @@
         <div class="field-row">
           <div class="field">
             <label for="feedProxyInput">Feed / article proxy template (non-Google URLs)</label>
-            <input id="feedProxyInput" value="https://corsproxy.io/?{{url}}" autocomplete="off" spellcheck="false">
+            <input id="feedProxyInput" value="https://corsproxy.io/?key=f136e028&amp;url={{url}}" autocomplete="off" spellcheck="false">
           </div>
           <div class="field">
             <label for="pollMinutesInput">Rescan delay after a completed batch (minutes)</label>
@@ -414,7 +414,7 @@
     function getApiBase() { return norm($('apiBaseInput').value) || 'https://p2fk.io'; }
     function getMempoolApi() { return norm($('mempoolInput').value) || 'https://mempool.space/testnet/api'; }
     function getFeedUrl() { return norm($('feedUrlInput').value) || 'https://news.google.com/rss/search?q=site:apnews.com'; }
-    function getFeedProxyTemplate() { return norm($('feedProxyInput').value) || 'https://corsproxy.io/?{{url}}'; }
+    function getFeedProxyTemplate() { return norm($('feedProxyInput').value) || 'https://corsproxy.io/?key=f136e028&url={{url}}'; }
     function isGoogleCall(url) {
       try {
         const hostname = new URL(url).hostname.toLowerCase();
@@ -424,7 +424,7 @@
       }
     }
     function buildCorsProxyUrl(url) {
-      return `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      return `https://corsproxy.io/?key=f136e028&url=${encodeURIComponent(url)}`;
     }
     function buildTemplateProxyUrl(url, template = getFeedProxyTemplate()) {
       if (!template) return '';
