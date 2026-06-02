@@ -337,6 +337,11 @@
     const TXID_RE = /^[0-9a-fA-F]{64}$/;
     const HEADLINE_PADDING_MAX = 14;
     const STORY_TEXT_MAX = 1000;
+    const MIN_SUBSTANTIVE_CHARS = 220;
+    const MIN_SUBSTANTIVE_WORDS = 45;
+    const MIN_PUNCTUATED_WORDS = 25;
+    const MIN_PARAGRAPH_LENGTH = 60;
+    const MAX_PARAGRAPHS_FOR_FALLBACK = 8;
 
     const S = {
       priv: null,
@@ -987,7 +992,9 @@
       const text = norm(String(value || '')).replace(/\s+/g, ' ');
       if (!text) return false;
       const words = text.split(' ').filter(Boolean);
-      return text.length >= 220 || words.length >= 45 || (words.length >= 25 && /[.!?]/.test(text));
+      return text.length >= MIN_SUBSTANTIVE_CHARS
+        || words.length >= MIN_SUBSTANTIVE_WORDS
+        || (words.length >= MIN_PUNCTUATED_WORDS && /[.!?]/.test(text));
     }
 
     function extractCanonicalLinkFromHtml(html) {
@@ -1025,8 +1032,8 @@
       }
       const paragraphText = [...box.querySelectorAll('p')]
         .map(node => norm(node.textContent || '').replace(/\s+/g, ' '))
-        .filter(text => text.length >= 60)
-        .slice(0, 8)
+        .filter(text => text.length >= MIN_PARAGRAPH_LENGTH)
+        .slice(0, MAX_PARAGRAPHS_FOR_FALLBACK)
         .join(' ');
       if (isSubstantiveStoryText(paragraphText)) return paragraphText.substring(0, STORY_TEXT_MAX);
       return '';
@@ -1320,7 +1327,11 @@
       if (bodyText && description) {
         const bodyNorm = normalizeLooseText(bodyText);
         const descNorm = normalizeLooseText(description);
-        if (bodyNorm && descNorm && (bodyNorm.includes(descNorm) || descNorm.includes(bodyNorm))) bodyText = '';
+        const closeLength = Math.abs(bodyNorm.length - descNorm.length) <= 40;
+        const effectivelySame = bodyNorm === descNorm
+          || (bodyNorm.startsWith(descNorm) && closeLength)
+          || (descNorm.startsWith(bodyNorm) && closeLength);
+        if (bodyNorm && descNorm && effectivelySame) bodyText = '';
       }
       const bits = [];
       if (prefix) bits.push(prefix);
