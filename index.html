@@ -348,6 +348,7 @@
     const LINK_PRIORITY_OTHER = 1;
     const LINK_PRIORITY_GOOGLE = 2;
     const MAX_VISIBLE_CONFIRMED = 5;
+    const BALANCE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
     const DEFAULT_FEED_SOURCES = [
       'https://feeds.npr.org/1001/rss.xml',
       'https://www.aljazeera.com/xml/rss/all.xml',
@@ -376,6 +377,8 @@
       lastCompletedScanAt: 0,
       syncStateById: new Map(),
       recentConfirmedIds: [],
+      lastBalanceCheckAt: 0,
+      lastPendingWalletActivity: false,
     };
 
     const $ = id => document.getElementById(id);
@@ -1469,8 +1472,14 @@
 
     async function hasPendingWalletActivity() {
       if (!S.keyring) return false;
+      if (S.nextScanTimer && !S.syncQueue.length) return false;
+      const now = Date.now();
+      if (S.lastBalanceCheckAt && now - S.lastBalanceCheckAt < BALANCE_CHECK_INTERVAL_MS) return S.lastPendingWalletActivity;
       const balances = await Promise.all(S.keyring.all.map(signer => getBalance(signer.addr)));
-      return balances.some(item => item.unconfirmed > 0 || item.mempoolSpent > 0);
+      const hasPending = balances.some(item => item.unconfirmed > 0 || item.mempoolSpent > 0);
+      S.lastBalanceCheckAt = now;
+      S.lastPendingWalletActivity = hasPending;
+      return hasPending;
     }
 
     async function isLastBroadcastConfirmed() {
@@ -1683,6 +1692,8 @@
       S.syncQueue = [];
       S.syncRunning = true;
       S.nextScanTimer = null;
+      S.lastBalanceCheckAt = 0;
+      S.lastPendingWalletActivity = false;
       S.syncTimer = setInterval(() => {
         refreshConfirmationStates().catch(() => {});
         processAutoSync().catch(() => {});
@@ -1698,6 +1709,8 @@
       S.syncTimer = null;
       S.nextScanTimer = null;
       S.syncQueue = [];
+      S.lastBalanceCheckAt = 0;
+      S.lastPendingWalletActivity = false;
       appendLog('Auto archive stopped.');
       setStatus('analysisStatus', 'Auto archive stopped.', 'warn');
       renderSummary();
