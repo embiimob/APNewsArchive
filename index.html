@@ -1518,7 +1518,7 @@
       if (title) bits.push(title);
       if (bodyText) bits.push(bodyText);
       else if (description && !isDuplicateHeadline(description, title)) bits.push(description);
-      if (articleLink) bits.push(`Read more: ${articleLink} <<${articleLink}>>`);
+      if (articleLink) bits.push(`Read more: <<${articleLink}>>`);
       if (article?.publishedAt) bits.push(`Published: ${article.publishedAt}`);
       bits.push(`#${S.keyword}`);
       return bits.filter(Boolean).join('\n\n');
