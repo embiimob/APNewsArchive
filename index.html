@@ -1187,33 +1187,34 @@
       return norm(img?.getAttribute('src') || '');
     }
 
+    function normalizeIdentifierUrl(rawUrl) {
+      const source = norm(rawUrl);
+      if (!source) return '';
+      try {
+        const parsed = new URL(source);
+        parsed.hash = '';
+        const trackerParams = [
+          'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+          'utm_name', 'utm_id', 'gclid', 'fbclid', 'mc_cid', 'mc_eid', 'ref', 'ref_src',
+        ];
+        trackerParams.forEach(param => parsed.searchParams.delete(param));
+        const sortedParams = [...parsed.searchParams.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+        parsed.search = '';
+        sortedParams.forEach(([key, value]) => parsed.searchParams.append(key, value));
+        parsed.hostname = parsed.hostname.toLowerCase();
+        parsed.pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
+        return parsed.toString();
+      } catch {
+        return source.toLowerCase();
+      }
+    }
+
     async function buildArticleIdentifier(article) {
-      const normalizeIdentifierUrl = (rawUrl) => {
-        const source = norm(rawUrl);
-        if (!source) return '';
-        try {
-          const parsed = new URL(source);
-          parsed.hash = '';
-          const trackerParams = [
-            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-            'utm_name', 'utm_id', 'gclid', 'fbclid', 'mc_cid', 'mc_eid', 'ref', 'ref_src',
-          ];
-          trackerParams.forEach(param => parsed.searchParams.delete(param));
-          const sortedParams = [...parsed.searchParams.entries()]
-            .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
-          parsed.search = '';
-          sortedParams.forEach(([key, value]) => parsed.searchParams.append(key, value));
-          parsed.hostname = parsed.hostname.toLowerCase();
-          parsed.pathname = (parsed.pathname || '/').replace(/\/+$/, '') || '/';
-          return parsed.toString();
-        } catch {
-          return source.toLowerCase();
-        }
-      };
       const primaryUrl = getPreferredArticleLink(article) || norm(article.guid);
       const normalizedUrl = normalizeIdentifierUrl(primaryUrl);
       if (!normalizedUrl) throw new Error('Article is missing URL fields (link, sourceLink, or guid) for stable identifier generation');
-      return `APID:${(await sha256hex(normalizedUrl)).slice(0, 24).toUpperCase()}`;
+      return normalizedUrl;
     }
 
     function parseFeedItems(raw) {
@@ -1357,13 +1358,17 @@
         const data = await fetchJ(`${getApiBase()}/GetPublicMessagesByAddress/${encodeURIComponent(address)}?mainnet=false&skip=${skip}&qty=${pageSize}`, 30000);
         const batch = (Array.isArray(data) ? data : []).map(item => normalizeRoot(item.Root || item.root || item)).filter(Boolean);
         batch.forEach(root => {
-          const identifiers = unique((root.message || '').match(/APID:[A-F0-9]{24}/gi) || []);
+          const parsedLinks = parseMsg(root.message || '').links || [];
+          const normalizedLinks = parsedLinks.map(normalizeIdentifierUrl).filter(Boolean);
+          const legacyIdentifiers = ((root.message || '').match(/APID:[A-F0-9]{24}/gi) || []).map(id => id.toUpperCase());
+          const identifiers = unique([...normalizedLinks, ...legacyIdentifiers]);
+
           identifiers.forEach(identifier => {
-            const key = `${identifier.toUpperCase()}:${root.txId}`;
+            const key = `${identifier}:${root.txId}`;
             if (seen.has(key)) return;
             seen.add(key);
             rows.push({
-              identifier: identifier.toUpperCase(),
+              identifier: identifier,
               txId: root.txId,
               message: parseMsg(root.message || '').clean || root.message || '',
               fromAddr: root.fromAddr,
@@ -1374,7 +1379,7 @@
         });
         if (batch.length < pageSize) break;
       }
-      appendLog(`Loaded ${rows.length} AP identifiers from p2fk keyword #${normalizedKeyword}.`, 'good');
+      appendLog(`Loaded ${rows.length} story identifiers from p2fk keyword #${normalizedKeyword}.`, 'good');
       return rows;
     }
 
@@ -1511,8 +1516,7 @@
       if (title) bits.push(title);
       if (bodyText) bits.push(bodyText);
       else if (description && !isDuplicateHeadline(description, title)) bits.push(description);
-      if (articleLink) bits.push(`Read more: ${articleLink}`);
-      bits.push(`Identifier: ${row.identifier}`);
+      if (articleLink) bits.push(`Read more: <<${articleLink}>>`);
       if (article?.publishedAt) bits.push(`Published: ${article.publishedAt}`);
       bits.push(`#${S.keyword}`);
       return bits.filter(Boolean).join('\n\n');
