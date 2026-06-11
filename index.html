@@ -927,7 +927,28 @@
       const kr = S.keyring || await buildKeyring(S.priv);
       if (!S.keyring) S.keyring = kr;
       const [cA, cB] = kr.changes;
-      const utxoGroups = await Promise.all(kr.all.map(async sg => {
+
+      const balances = await Promise.all(kr.all.map(async sg => ({
+        signer: sg,
+        ...await getBalance(sg.addr)
+      })));
+
+      const totalsByAddr = balances.reduce((m, b) => m.set(b.signer.addr, b.confirmed), new Map());
+      const totalConfirmed = Array.from(totalsByAddr.values()).reduce((a, b) => a + b, 0);
+      if (totalConfirmed <= 0) throw new Error('No confirmed funds available');
+
+      let feeRate = FEE_DEFAULT;
+      try {
+        const fr = await fetch(`${getMempoolApi()}/v1/fees/recommended`);
+        const fp = await fr.json();
+        feeRate = Math.max(Number(fp?.halfHourFee || FEE_DEFAULT), FEE_MIN);
+      } catch {}
+
+      const estFee = (inputs, outputsCount) => Math.ceil((10 + 148 * inputs + 34 * outputsCount) * feeRate);
+      const outSats = outputs.map(o => ({ addr: o.addr, sat: Math.round(o.amount * 1e8) }));
+      const totalOut = outSats.reduce((s, o) => s + o.sat, 0);
+
+      const fetchUtxos = async (sg) => {
         try {
           const res = await fetch(`${getMempoolApi()}/address/${encodeURIComponent(sg.addr)}/utxo`);
           if (!res.ok) {
@@ -940,24 +961,25 @@
           console.warn(`UTXO fetch error for ${sg.label}: ${err.message}`);
           return [];
         }
-      }));
-      const allUtxos = utxoGroups.flat();
-      if (!allUtxos.length) throw new Error('No confirmed UTXOs found');
-      let feeRate = FEE_DEFAULT;
-      try {
-        const fr = await fetch(`${getMempoolApi()}/v1/fees/recommended`);
-        const fp = await fr.json();
-        feeRate = Math.max(Number(fp?.halfHourFee || FEE_DEFAULT), FEE_MIN);
-      } catch {}
-      const estFee = (inputs, outputsCount) => Math.ceil((10 + 148 * inputs + 34 * outputsCount) * feeRate);
-      const outSats = outputs.map(o => ({ addr: o.addr, sat: Math.round(o.amount * 1e8) }));
-      const totalOut = outSats.reduce((s, o) => s + o.sat, 0);
-      const totalsByAddr = kr.all.reduce((m, sg) => m.set(sg.addr, 0), new Map());
-      allUtxos.forEach(u => totalsByAddr.set(u.srcAddr, (totalsByAddr.get(u.srcAddr) || 0) + Number(u.value || 0)));
+      };
+
       const candidates = [kr.main, cA, cB].sort((a, b) => (totalsByAddr.get(b.addr) || 0) - (totalsByAddr.get(a.addr) || 0));
       let selected = null, selectedUtxos = [], selectedTotal = 0;
+      let allFetchedUtxos = [];
+      const fetchedAddrs = new Set();
+
       for (const src of candidates) {
-        const pool = allUtxos.filter(u => u.srcAddr === src.addr).sort((a, b) => b.value - a.value);
+        if ((totalsByAddr.get(src.addr) || 0) <= 0) continue;
+
+        let pool = allFetchedUtxos.filter(u => u.srcAddr === src.addr);
+        if (!fetchedAddrs.has(src.addr)) {
+            pool = await fetchUtxos(src);
+            allFetchedUtxos.push(...pool);
+            fetchedAddrs.add(src.addr);
+        }
+
+        pool = pool.sort((a, b) => b.value - a.value);
+
         let local = [], total = 0;
         for (const u of pool) {
           local.push(u); total += u.value;
@@ -967,8 +989,16 @@
         }
         if (selectedUtxos.length) break;
       }
+
       if (!selectedUtxos.length) {
-        const mixPool = [...allUtxos].sort((a, b) => b.value - a.value);
+        for (const src of candidates) {
+            if ((totalsByAddr.get(src.addr) || 0) > 0 && !fetchedAddrs.has(src.addr)) {
+                const pool = await fetchUtxos(src);
+                allFetchedUtxos.push(...pool);
+                fetchedAddrs.add(src.addr);
+            }
+        }
+        const mixPool = [...allFetchedUtxos].sort((a, b) => b.value - a.value);
         let local = [], total = 0;
         for (const u of mixPool) {
           local.push(u); total += u.value;
